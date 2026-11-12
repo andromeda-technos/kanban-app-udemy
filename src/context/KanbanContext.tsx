@@ -2,22 +2,44 @@ import React, { createContext, useContext, useState, useEffect, useMemo, useCall
 import {
   Board,
   Column,
+  ColumnNote,
+  Subtask,
+  MediaAttachment,
   Task,
   ActivityLog,
   FilterState,
   Assignee,
+  TokenTimer,
 } from '../types/kanban';
 import {
   INITIAL_BOARDS,
   INITIAL_COLUMNS,
   INITIAL_TASKS,
   INITIAL_LOGS,
+  INITIAL_ASSIGNEES,
   STORAGE_KEYS,
+  DEFAULT_TAGS,
+  mergeTaskTags,
   loadFromStorage,
+  normalizeTasks,
   saveToStorage,
   DEFAULT_FILTER_STATE,
 } from '../utils/storage';
 import { triggerConfetti } from '../utils/confetti';
+import { compareTasks, matchesComplexity } from '../utils/taskSort';
+import { cleanupOrphanMedia } from '../utils/mediaStore';
+import { useAuth } from './AuthContext';
+import { SyncState, useSupabaseSync } from '../sync/useSupabaseSync';
+import {
+  assigneeSpec,
+  boardSpec,
+  columnSpec,
+  logSpec,
+  tagSpec,
+  taskSpec,
+  timerSpec,
+} from '../sync/mappers';
+import { isDoneColumn } from '../utils/deadline';
 
 interface KanbanContextType {
   boards: Board[];
@@ -34,6 +56,10 @@ interface KanbanContextType {
   updateColumn: (id: string, title: string, color: string, wipLimit?: number) => void;
   deleteColumn: (id: string) => void;
   moveColumnOrder: (columnId: string, direction: 'left' | 'right') => void;
+  reorderColumn: (columnId: string, insertIndex: number) => void;
+  addColumnNote: (columnId: string, text: string, taskIds?: string[]) => void;
+  updateColumnNote: (columnId: string, noteId: string, text: string, taskIds?: string[]) => void;
+  deleteColumnNote: (columnId: string, noteId: string) => void;
 
   tasks: Task[];
   activeTasks: Task[];
@@ -44,6 +70,9 @@ interface KanbanContextType {
   moveTask: (taskId: string, targetColumnId: string, targetIndex: number) => void;
   quickMoveTask: (taskId: string, direction: 'prev' | 'next') => void;
   toggleSubtask: (taskId: string, subtaskId: string) => void;
+  reorderSubtasks: (taskId: string, subtasks: Subtask[]) => void;
+  updateSubtaskNote: (taskId: string, subtaskId: string, note: string) => void;
+  updateTaskMedia: (taskId: string, media: MediaAttachment | undefined) => void;
 
   filters: FilterState;
   setFilters: React.Dispatch<React.SetStateAction<FilterState>>;
@@ -61,7 +90,39 @@ interface KanbanContextType {
 
   allTags: string[];
   allAssignees: Assignee[];
+
+  // Global assignee directory (managed from Global Settings)
+  assignees: Assignee[];
+  createAssignee: (name: string, avatarColor: string) => void;
+  updateAssignee: (id: string, name: string, avatarColor: string) => void;
+  deleteAssignee: (id: string) => void;
+
+  // AI token refresh timers per assignee
+  tokenTimers: TokenTimer[];
+  createTokenTimer: (data: Omit<TokenTimer, 'id' | 'createdAt' | 'notifiedBefore' | 'notifiedReady'>) => void;
+  updateTokenTimer: (id: string, patch: Partial<Omit<TokenTimer, 'id'>>) => void;
+  deleteTokenTimer: (id: string) => void;
+
+  // Global tag directory: tags offered when editing a task (managed from Global Settings)
+  tagOptions: string[];
+  createTag: (label: string) => boolean;
+  renameTag: (oldLabel: string, newLabel: string) => boolean;
+  deleteTag: (label: string) => void;
+
+  /** Supabase sync state ('local' when running without cloud) */
+  sync: SyncState;
 }
+
+// Merge assignees referenced by tasks into the directory so no task points to an unknown person
+const mergeTaskAssignees = (directory: Assignee[], taskList: Task[]): Assignee[] => {
+  const map = new Map<string, Assignee>(directory.map((a) => [a.id, a]));
+  taskList.forEach((t) => {
+    t.assignees.forEach((a) => {
+      if (!map.has(a.id)) map.set(a.id, a);
+    });
+  });
+  return Array.from(map.values());
+};
 
 const KanbanContext = createContext<KanbanContextType | undefined>(undefined);
 
@@ -79,7 +140,30 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   );
 
   const [tasks, setTasks] = useState<Task[]>(() =>
-    loadFromStorage<Task[]>(STORAGE_KEYS.TASKS, INITIAL_TASKS)
+    normalizeTasks(loadFromStorage<Task[]>(STORAGE_KEYS.TASKS, INITIAL_TASKS))
+  );
+
+  const [assignees, setAssignees] = useState<Assignee[]>(() => {
+    const stored = loadFromStorage<Assignee[] | null>(STORAGE_KEYS.ASSIGNEES, null);
+    if (stored) return stored;
+    // First run / migration: seed from defaults plus any custom assignees already on tasks
+    return mergeTaskAssignees(
+      INITIAL_ASSIGNEES,
+      normalizeTasks(loadFromStorage<Task[]>(STORAGE_KEYS.TASKS, INITIAL_TASKS))
+    );
+  });
+
+  const [tagOptions, setTagOptions] = useState<string[]>(() => {
+    const stored = loadFromStorage<string[] | null>(STORAGE_KEYS.TAGS, null);
+    // First run / migration: defaults plus every tag already used on tasks
+    return mergeTaskTags(
+      Array.isArray(stored) ? stored : DEFAULT_TAGS,
+      normalizeTasks(loadFromStorage<Task[]>(STORAGE_KEYS.TASKS, INITIAL_TASKS))
+    );
+  });
+
+  const [tokenTimers, setTokenTimers] = useState<TokenTimer[]>(() =>
+    loadFromStorage<TokenTimer[]>(STORAGE_KEYS.TOKEN_TIMERS, [])
   );
 
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>(() =>
@@ -94,7 +178,18 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       : 'light';
   });
 
-  const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTER_STATE);
+  // The chosen sort order is remembered across reloads (the other filters are not)
+  const [filters, setFilters] = useState<FilterState>(() => {
+    const saved = loadFromStorage<Partial<Pick<FilterState, 'sortBy' | 'sortReverse'>>>(STORAGE_KEYS.SORT, {});
+    return {
+      ...DEFAULT_FILTER_STATE,
+      ...(saved.sortBy ? { sortBy: saved.sortBy } : {}),
+      ...(typeof saved.sortReverse === 'boolean' ? { sortReverse: saved.sortReverse } : {}),
+    };
+  });
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.SORT, { sortBy: filters.sortBy, sortReverse: filters.sortReverse });
+  }, [filters.sortBy, filters.sortReverse]);
 
   // Sync to localStorage
   useEffect(() => {
@@ -111,6 +206,33 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.TASKS, tasks);
+  }, [tasks]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.ASSIGNEES, assignees);
+  }, [assignees]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.TAGS, tagOptions);
+  }, [tagOptions]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.TOKEN_TIMERS, tokenTimers);
+  }, [tokenTimers]);
+
+  // Once per app start: drop uploaded cover media that no task references anymore
+  // (removed/replaced media, deleted tasks). Not done eagerly so "Batal" in the form stays safe.
+  useEffect(() => {
+    cleanupOrphanMedia(tasks);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Any tag used on a task (new task, edit, import...) is recorded in the tag directory right away
+  useEffect(() => {
+    setTagOptions((prev) => {
+      const merged = mergeTaskTags(prev, tasks);
+      return merged.length === prev.length ? prev : merged;
+    });
   }, [tasks]);
 
   useEffect(() => {
@@ -169,7 +291,7 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const allAssignees = useMemo(() => {
     const map = new Map<string, Assignee>();
     activeTasks.forEach((t) => {
-      if (t.assignee) map.set(t.assignee.id, t.assignee);
+      t.assignees.forEach((a) => map.set(a.id, a));
     });
     return Array.from(map.values());
   }, [activeTasks]);
@@ -190,7 +312,7 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           const matchTitle = task.title.toLowerCase().includes(searchLower);
           const matchDesc = task.description.toLowerCase().includes(searchLower);
           const matchTag = task.tags.some((tag) => tag.toLowerCase().includes(searchLower));
-          const matchAssignee = task.assignee?.name.toLowerCase().includes(searchLower);
+          const matchAssignee = task.assignees.some((a) => a.name.toLowerCase().includes(searchLower));
           if (!matchTitle && !matchDesc && !matchTag && !matchAssignee) return false;
         }
 
@@ -207,8 +329,11 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         // Assignee filter
         if (filters.assignees.length > 0) {
-          if (!task.assignee || !filters.assignees.includes(task.assignee.id)) return false;
+          if (!task.assignees.some((a) => filters.assignees.includes(a.id))) return false;
         }
+
+        // Complexity (number of subtasks)
+        if (!matchesComplexity(task, filters.complexity)) return false;
 
         // Due date filter
         if (filters.dueFilter !== 'all') {
@@ -224,25 +349,7 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         return true;
       })
-      .sort((a, b) => {
-        if (filters.sortBy === 'dueDate') {
-          if (!a.dueDate) return 1;
-          if (!b.dueDate) return -1;
-          return a.dueDate.localeCompare(b.dueDate);
-        }
-        if (filters.sortBy === 'priority') {
-          const weight = { urgent: 4, high: 3, medium: 2, low: 1 };
-          return weight[b.priority] - weight[a.priority];
-        }
-        if (filters.sortBy === 'title') {
-          return a.title.localeCompare(b.title);
-        }
-        if (filters.sortBy === 'createdAt') {
-          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-        }
-        // Custom order
-        return a.order - b.order;
-      });
+      .sort(compareTasks(filters.sortBy, filters.sortReverse));
   }, [activeTasks, filters]);
 
   // Board actions
@@ -316,6 +423,54 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     [activeBoard, activeColumns.length, addLog]
   );
 
+  // Column notes ("Catatan Penting")
+  const mapColumnNotes = useCallback(
+    (columnId: string, fn: (notes: ColumnNote[]) => ColumnNote[]) =>
+      setColumns((prev) =>
+        prev.map((c) => (c.id === columnId ? { ...c, notes: fn(c.notes ?? []) } : c))
+      ),
+    []
+  );
+
+  const addColumnNote = useCallback(
+    (columnId: string, text: string, taskIds: string[] = []) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      mapColumnNotes(columnId, (notes) => [
+        ...notes,
+        {
+          id: `note-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          text: trimmed,
+          taskIds,
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+    },
+    [mapColumnNotes]
+  );
+
+  const updateColumnNote = useCallback(
+    (columnId: string, noteId: string, text: string, taskIds?: string[]) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      mapColumnNotes(columnId, (notes) =>
+        notes.map((n) =>
+          n.id === noteId
+            ? { ...n, text: trimmed, taskIds: taskIds ?? n.taskIds, updatedAt: new Date().toISOString() }
+            : n
+        )
+      );
+    },
+    [mapColumnNotes]
+  );
+
+  const deleteColumnNote = useCallback(
+    (columnId: string, noteId: string) => {
+      mapColumnNotes(columnId, (notes) => notes.filter((n) => n.id !== noteId));
+    },
+    [mapColumnNotes]
+  );
+
   const updateColumn = useCallback(
     (id: string, title: string, color: string, wipLimit?: number) => {
       setColumns((prev) =>
@@ -353,6 +508,26 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       newCols.splice(targetIndex, 0, moved);
 
       // Reassign order
+      const reordered = newCols.map((c, idx) => ({ ...c, order: idx }));
+      const otherCols = columns.filter((c) => c.boardId !== activeBoardId);
+      setColumns([...otherCols, ...reordered]);
+    },
+    [activeColumns, columns, activeBoardId]
+  );
+
+  // Drag & drop: insertIndex is the gap position (0..length) in the current column order
+  const reorderColumn = useCallback(
+    (columnId: string, insertIndex: number) => {
+      const currentIndex = activeColumns.findIndex((c) => c.id === columnId);
+      if (currentIndex === -1) return;
+
+      const targetIndex = insertIndex > currentIndex ? insertIndex - 1 : insertIndex;
+      if (targetIndex === currentIndex) return;
+
+      const newCols = [...activeColumns];
+      const [moved] = newCols.splice(currentIndex, 1);
+      newCols.splice(targetIndex, 0, moved);
+
       const reordered = newCols.map((c, idx) => ({ ...c, order: idx }));
       const otherCols = columns.filter((c) => c.boardId !== activeBoardId);
       setColumns([...otherCols, ...reordered]);
@@ -409,13 +584,7 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const targetColumn = columns.find((c) => c.id === targetColumnId);
 
         // Check if moving to done/finished column for celebration
-        if (
-          !isSameColumn &&
-          targetColumn &&
-          (targetColumn.title.toLowerCase().includes('done') ||
-            targetColumn.title.toLowerCase().includes('selesai') ||
-            targetColumn.title.toLowerCase().includes('shipped'))
-        ) {
+        if (!isSameColumn && targetColumn && isDoneColumn(targetColumn)) {
           triggerConfetti();
         }
 
@@ -490,7 +659,13 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         prev.map((task) => {
           if (task.id !== taskId) return task;
           const updatedSubtasks = task.subtasks.map((st) =>
-            st.id === subtaskId ? { ...st, completed: !st.completed } : st
+            st.id === subtaskId
+              ? {
+                  ...st,
+                  completed: !st.completed,
+                  completedAt: !st.completed ? new Date().toISOString() : st.completedAt,
+                }
+              : st
           );
           return { ...task, subtasks: updatedSubtasks, updatedAt: new Date().toISOString() };
         })
@@ -498,6 +673,141 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     },
     []
   );
+
+  const updateSubtaskNote = useCallback((taskId: string, subtaskId: string, note: string) => {
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.id === taskId
+          ? {
+              ...task,
+              subtasks: task.subtasks.map((st) =>
+                st.id === subtaskId ? { ...st, note: note || undefined } : st
+              ),
+              updatedAt: new Date().toISOString(),
+            }
+          : task
+      )
+    );
+  }, []);
+
+  const updateTaskMedia = useCallback((taskId: string, media: MediaAttachment | undefined) => {
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.id === taskId ? { ...task, media, updatedAt: new Date().toISOString() } : task
+      )
+    );
+  }, []);
+
+  const reorderSubtasks = useCallback((taskId: string, subtasks: Subtask[]) => {
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.id === taskId ? { ...task, subtasks, updatedAt: new Date().toISOString() } : task
+      )
+    );
+  }, []);
+
+  // Assignee directory actions
+  const createAssignee = useCallback((name: string, avatarColor: string) => {
+    const newAssignee: Assignee = {
+      id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      name,
+      avatarColor,
+    };
+    setAssignees((prev) => [...prev, newAssignee]);
+  }, []);
+
+  const updateAssignee = useCallback((id: string, name: string, avatarColor: string) => {
+    const updated: Assignee = { id, name, avatarColor };
+    setAssignees((prev) => prev.map((a) => (a.id === id ? updated : a)));
+    // Propagate the new name/color to every task assigned to this person
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.assignees.some((a) => a.id === id)
+          ? { ...t, assignees: t.assignees.map((a) => (a.id === id ? updated : a)) }
+          : t
+      )
+    );
+  }, []);
+
+  const deleteAssignee = useCallback(
+    (id: string) => {
+      setAssignees((prev) => prev.filter((a) => a.id !== id));
+      // Unassign the removed person from their tasks
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.assignees.some((a) => a.id === id)
+            ? { ...t, assignees: t.assignees.filter((a) => a.id !== id) }
+            : t
+        )
+      );
+      setFilters((prev) => ({ ...prev, assignees: prev.assignees.filter((a) => a !== id) }));
+      setTokenTimers((prev) => prev.filter((t) => t.assigneeId !== id));
+    },
+    []
+  );
+
+  // Token timer actions
+  const createTokenTimer = useCallback(
+    (data: Omit<TokenTimer, 'id' | 'createdAt' | 'notifiedBefore' | 'notifiedReady'>) => {
+      setTokenTimers((prev) => [
+        ...prev,
+        {
+          ...data,
+          id: `timer-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          createdAt: new Date().toISOString(),
+          notifiedBefore: false,
+          notifiedReady: false,
+        },
+      ]);
+    },
+    []
+  );
+
+  const updateTokenTimer = useCallback((id: string, patch: Partial<Omit<TokenTimer, 'id'>>) => {
+    setTokenTimers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  }, []);
+
+  const deleteTokenTimer = useCallback((id: string) => {
+    setTokenTimers((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  // Tag directory actions (case-insensitive uniqueness)
+  const createTag = useCallback(
+    (label: string) => {
+      const trimmed = label.trim();
+      if (!trimmed || tagOptions.some((t) => t.toLowerCase() === trimmed.toLowerCase())) return false;
+      setTagOptions((prev) => [...prev, trimmed]);
+      return true;
+    },
+    [tagOptions]
+  );
+
+  const renameTag = useCallback(
+    (oldLabel: string, newLabel: string) => {
+      const trimmed = newLabel.trim();
+      if (!trimmed) return false;
+      if (tagOptions.some((t) => t !== oldLabel && t.toLowerCase() === trimmed.toLowerCase())) return false;
+      if (trimmed === oldLabel) return true;
+      const swap = (list: string[]) => list.map((t) => (t === oldLabel ? trimmed : t));
+      // Propagate the new name to every task and the active filter
+      setTasks((prev) =>
+        prev.map((t) => (t.tags.includes(oldLabel) ? { ...t, tags: swap(t.tags) } : t))
+      );
+      setFilters((prev) => ({ ...prev, tags: swap(prev.tags) }));
+      setTagOptions((prev) => swap(prev));
+      return true;
+    },
+    [tagOptions]
+  );
+
+  const deleteTag = useCallback((label: string) => {
+    setTagOptions((prev) => prev.filter((t) => t !== label));
+    // Remove it from tasks too, otherwise it would be recorded again immediately
+    setTasks((prev) =>
+      prev.map((t) => (t.tags.includes(label) ? { ...t, tags: t.tags.filter((x) => x !== label) } : t))
+    );
+    setFilters((prev) => ({ ...prev, tags: prev.tags.filter((t) => t !== label) }));
+  }, []);
 
   const resetFilters = useCallback(() => {
     setFilters(DEFAULT_FILTER_STATE);
@@ -514,6 +824,9 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       boards,
       columns,
       tasks,
+      assignees,
+      tags: tagOptions,
+      tokenTimers,
     };
     const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(
       JSON.stringify(data, null, 2)
@@ -524,7 +837,7 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
-  }, [boards, columns, tasks]);
+  }, [boards, columns, tasks, assignees, tagOptions, tokenTimers]);
 
   const importData = useCallback(
     (jsonString: string): { success: boolean; message: string } => {
@@ -535,7 +848,15 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
         setBoards(parsed.boards);
         setColumns(parsed.columns);
-        setTasks(parsed.tasks);
+        const importedTasks = normalizeTasks(parsed.tasks);
+        setTasks(importedTasks);
+        setAssignees(
+          mergeTaskAssignees(Array.isArray(parsed.assignees) ? parsed.assignees : [], importedTasks)
+        );
+        setTagOptions(
+          mergeTaskTags(Array.isArray(parsed.tags) ? parsed.tags : DEFAULT_TAGS, importedTasks)
+        );
+        setTokenTimers(Array.isArray(parsed.tokenTimers) ? parsed.tokenTimers : []);
         if (parsed.boards.length > 0) {
           setActiveBoardId(parsed.boards[0].id);
         }
@@ -553,9 +874,56 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setActiveBoardId(INITIAL_BOARDS[0].id);
     setColumns(INITIAL_COLUMNS);
     setTasks(INITIAL_TASKS);
+    setAssignees(INITIAL_ASSIGNEES);
+    setTagOptions(mergeTaskTags(DEFAULT_TAGS, INITIAL_TASKS));
+    setTokenTimers([]);
     setActivityLogs(INITIAL_LOGS);
     setFilters(DEFAULT_FILTER_STATE);
   }, []);
+
+  // ---------- Cloud sync (Supabase) ----------
+  const { cloudEnabled } = useAuth();
+
+  // Empty team workspace + "Mulai dari kosong": one board with a basic workflow
+  const onFreshStart = useCallback(() => {
+    const now = new Date().toISOString();
+    const boardId = `board-${Date.now()}`;
+    const cols = [
+      { title: 'To Do', color: '#64748b' },
+      { title: 'In Progress', color: '#3b82f6' },
+      { title: 'Review', color: '#f59e0b' },
+      { title: 'Done', color: '#10b981' },
+    ].map((c, i) => ({ id: `col-${Date.now()}-${i}`, boardId, title: c.title, color: c.color, order: i }));
+    setBoards([{ id: boardId, title: 'Board Tim', description: 'Board bersama tim', createdAt: now }]);
+    setActiveBoardId(boardId);
+    setColumns(cols);
+    setTasks([]);
+    setAssignees([]);
+    setTagOptions(DEFAULT_TAGS);
+    setTokenTimers([]);
+    setActivityLogs([]);
+    setFilters(DEFAULT_FILTER_STATE);
+  }, []);
+
+  // Keep the selected board valid after the team data arrives
+  const onLoaded = useCallback((loaded: Board[]) => {
+    setActiveBoardId((prev) => (loaded.some((b) => b.id === prev) ? prev : loaded[0]?.id ?? ''));
+  }, []);
+
+  const sync = useSupabaseSync(
+    cloudEnabled,
+    {
+      boards: { spec: boardSpec, items: boards, set: setBoards, realtime: true },
+      columns: { spec: columnSpec, items: columns, set: setColumns, realtime: true },
+      tasks: { spec: taskSpec, items: tasks, set: setTasks, realtime: true },
+      assignees: { spec: assigneeSpec, items: assignees, set: setAssignees, realtime: true },
+      tags: { spec: tagSpec, items: tagOptions, set: setTagOptions, realtime: true },
+      timers: { spec: timerSpec, items: tokenTimers, set: setTokenTimers, realtime: true },
+      logs: { spec: logSpec, items: activityLogs, set: setActivityLogs, realtime: false },
+    },
+    onFreshStart,
+    onLoaded
+  );
 
   return (
     <KanbanContext.Provider
@@ -573,6 +941,10 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         updateColumn,
         deleteColumn,
         moveColumnOrder,
+        reorderColumn,
+        addColumnNote,
+        updateColumnNote,
+        deleteColumnNote,
         tasks,
         activeTasks,
         filteredTasks,
@@ -582,6 +954,9 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         moveTask,
         quickMoveTask,
         toggleSubtask,
+        reorderSubtasks,
+        updateSubtaskNote,
+        updateTaskMedia,
         filters,
         setFilters,
         resetFilters,
@@ -594,6 +969,19 @@ export const KanbanProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         resetToDemoData,
         allTags,
         allAssignees,
+        assignees,
+        createAssignee,
+        updateAssignee,
+        deleteAssignee,
+        tokenTimers,
+        createTokenTimer,
+        updateTokenTimer,
+        deleteTokenTimer,
+        tagOptions,
+        createTag,
+        renameTag,
+        deleteTag,
+        sync,
       }}
     >
       {children}

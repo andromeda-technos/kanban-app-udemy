@@ -1,7 +1,8 @@
 import React from 'react';
 import { useKanban } from '../context/KanbanContext';
-import { Priority, SortOption } from '../types/kanban';
-import { X, Filter, RotateCcw, ArrowUpDown } from 'lucide-react';
+import { Priority } from '../types/kanban';
+import { X, Filter, RotateCcw, ArrowUpDown, Layers } from 'lucide-react';
+import { COMPLEXITY_LEVELS, SORT_OPTIONS, complexityLevelOf } from '../utils/taskSort';
 
 interface FilterDrawerProps {
   isOpen: boolean;
@@ -9,7 +10,7 @@ interface FilterDrawerProps {
 }
 
 export const FilterDrawer: React.FC<FilterDrawerProps> = ({ isOpen, onClose }) => {
-  const { filters, setFilters, resetFilters, allTags, allAssignees } = useKanban();
+  const { filters, setFilters, resetFilters, allTags, allAssignees, activeTasks } = useKanban();
 
   if (!isOpen) return null;
 
@@ -18,14 +19,6 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = ({ isOpen, onClose }) =
     { value: 'high', label: 'Tinggi' },
     { value: 'medium', label: 'Sedang' },
     { value: 'low', label: 'Rendah' },
-  ];
-
-  const sortOptions: { value: SortOption; label: string }[] = [
-    { value: 'custom', label: 'Urutan Manual (Drag & Drop)' },
-    { value: 'dueDate', label: 'Tenggat Waktu Terdekat' },
-    { value: 'priority', label: 'Prioritas Tertinggi' },
-    { value: 'title', label: 'Abjad Judul (A-Z)' },
-    { value: 'createdAt', label: 'Tugas Terbaru Dibuat' },
   ];
 
   const togglePriority = (p: Priority) => {
@@ -60,7 +53,11 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = ({ isOpen, onClose }) =
     filters.tags.length > 0 ||
     filters.assignees.length > 0 ||
     filters.dueFilter !== 'all' ||
+    filters.complexity !== 'all' ||
     filters.sortBy !== 'custom';
+
+  const complexityCount = (key: string) =>
+    key === 'all' ? activeTasks.length : activeTasks.filter((t) => complexityLevelOf(t).key === key).length;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-xs">
@@ -99,25 +96,83 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = ({ isOpen, onClose }) =
               <ArrowUpDown className="w-3.5 h-3.5 text-blue-500" /> Urutkan Berdasarkan
             </label>
             <div className="space-y-1.5">
-              {sortOptions.map((opt) => (
-                <label
-                  key={opt.value}
-                  className={`flex items-center gap-2.5 p-2 rounded-xl text-xs font-medium cursor-pointer border transition-all ${
-                    filters.sortBy === opt.value
-                      ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
-                      : 'border-slate-100 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="sortBy"
-                    checked={filters.sortBy === opt.value}
-                    onChange={() => setFilters((prev) => ({ ...prev, sortBy: opt.value }))}
-                    className="w-3.5 h-3.5 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span>{opt.label}</span>
-                </label>
-              ))}
+              {SORT_OPTIONS.map((opt) => {
+                const isActive = filters.sortBy === opt.value;
+                return (
+                  <label
+                    key={opt.value}
+                    className={`flex items-center gap-2.5 p-2 rounded-xl text-xs font-medium cursor-pointer border transition-all ${
+                      isActive
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
+                        : 'border-slate-100 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="sortBy"
+                      checked={isActive}
+                      onChange={() => setFilters((prev) => ({ ...prev, sortBy: opt.value, sortReverse: false }))}
+                      className="w-3.5 h-3.5 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="font-semibold">{opt.label}</span>
+                    <span className="text-[11px] font-normal text-slate-400 truncate">
+                      {opt.value === 'custom' ? opt.natural : isActive && filters.sortReverse ? opt.reversed : opt.natural}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            {filters.sortBy !== 'custom' && (
+              <div className="mt-2 grid grid-cols-2 gap-1.5">
+                {[false, true].map((rev) => {
+                  const meta = SORT_OPTIONS.find((o) => o.value === filters.sortBy)!;
+                  const isActive = filters.sortReverse === rev;
+                  return (
+                    <button
+                      key={String(rev)}
+                      type="button"
+                      onClick={() => setFilters((prev) => ({ ...prev, sortReverse: rev }))}
+                      className={`p-2 rounded-xl border text-[11px] font-semibold transition-colors ${
+                        isActive
+                          ? 'border-blue-500 bg-blue-500 text-white'
+                          : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      {rev ? meta.reversed : meta.natural}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Complexity filter (by number of subtasks) */}
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2 flex items-center gap-1.5">
+              <Layers className="w-3.5 h-3.5 text-blue-500" /> Kompleksitas
+            </label>
+            <div className="grid grid-cols-2 gap-1.5 text-xs">
+              {[{ key: 'all', label: 'Semua', hint: 'semua tugas' }, ...COMPLEXITY_LEVELS].map((lv) => {
+                const isActive = filters.complexity === lv.key;
+                return (
+                  <button
+                    key={lv.key}
+                    type="button"
+                    onClick={() => setFilters((prev) => ({ ...prev, complexity: lv.key as typeof prev.complexity }))}
+                    className={`p-2 rounded-xl border text-left transition-colors ${
+                      isActive
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
+                        : 'border-slate-100 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <span className="flex items-center justify-between font-semibold">
+                      {lv.label}
+                      <span className="text-[10px] font-bold text-slate-400">{complexityCount(lv.key)}</span>
+                    </span>
+                    <span className="block text-[10px] text-slate-400">{lv.hint}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 

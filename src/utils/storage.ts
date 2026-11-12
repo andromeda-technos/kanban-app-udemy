@@ -1,4 +1,31 @@
-import { Board, Column, Task, ActivityLog, FilterState } from '../types/kanban';
+import {
+  Board,
+  Column,
+  Task,
+  ActivityLog,
+  FilterState,
+  Assignee,
+  Subtask,
+  MediaAttachment,
+} from '../types/kanban';
+
+export const INITIAL_ASSIGNEES: Assignee[] = [
+  { id: 'u1', name: 'Rian Pratama', avatarColor: '#3b82f6' },
+  { id: 'u2', name: 'Sarah Anindya', avatarColor: '#ec4899' },
+  { id: 'u3', name: 'Dimas Kurnia', avatarColor: '#10b981' },
+  { id: 'u4', name: 'Budi Santoso', avatarColor: '#8b5cf6' },
+];
+
+export const AVATAR_COLOR_PRESETS = [
+  '#3b82f6',
+  '#ec4899',
+  '#10b981',
+  '#8b5cf6',
+  '#f59e0b',
+  '#06b6d4',
+  '#f43f5e',
+  '#64748b',
+];
 
 export const INITIAL_BOARDS: Board[] = [
   {
@@ -45,7 +72,7 @@ export const INITIAL_TASKS: Task[] = [
     priority: 'urgent',
     dueDate: formatDate(-1), // Kemarin (overdue untuk demo alert)
     tags: ['Backend', 'Security', 'Auth'],
-    assignee: { id: 'u1', name: 'Rian Pratama', avatarColor: '#3b82f6' },
+    assignees: [{ id: 'u1', name: 'Rian Pratama', avatarColor: '#3b82f6' }],
     subtasks: [
       { id: 's1-1', title: 'Daftar credentials Google Cloud Console', completed: true },
       { id: 's1-2', title: 'Daftar credentials GitHub Developer Apps', completed: true },
@@ -64,7 +91,7 @@ export const INITIAL_TASKS: Task[] = [
     priority: 'high',
     dueDate: formatDate(1), // Besok
     tags: ['Frontend', 'UI/UX'],
-    assignee: { id: 'u2', name: 'Sarah Anindya', avatarColor: '#ec4899' },
+    assignees: [{ id: 'u2', name: 'Sarah Anindya', avatarColor: '#ec4899' }],
     subtasks: [
       { id: 's2-1', title: 'Design mockup di Figma', completed: true },
       { id: 's2-2', title: 'Slicing komponen React dengan Tailwind', completed: true },
@@ -82,7 +109,7 @@ export const INITIAL_TASKS: Task[] = [
     priority: 'urgent',
     dueDate: formatDate(2),
     tags: ['Backend', 'Payment'],
-    assignee: { id: 'u3', name: 'Dimas Kurnia', avatarColor: '#10b981' },
+    assignees: [{ id: 'u3', name: 'Dimas Kurnia', avatarColor: '#10b981' }],
     subtasks: [
       { id: 's3-1', title: 'Buat endpoint /api/charge', completed: true },
       { id: 's3-2', title: 'Verifikasi signature HMAC sha512', completed: false },
@@ -100,7 +127,7 @@ export const INITIAL_TASKS: Task[] = [
     priority: 'medium',
     dueDate: formatDate(3),
     tags: ['Database', 'Performance'],
-    assignee: { id: 'u1', name: 'Rian Pratama', avatarColor: '#3b82f6' },
+    assignees: [{ id: 'u1', name: 'Rian Pratama', avatarColor: '#3b82f6' }],
     subtasks: [
       { id: 's4-1', title: 'EXPLAIN ANALYZE query berat', completed: true },
       { id: 's4-2', title: 'Tambahkan index btree pada status & created_at', completed: true },
@@ -117,7 +144,7 @@ export const INITIAL_TASKS: Task[] = [
     priority: 'high',
     dueDate: formatDate(-2),
     tags: ['DevOps', 'CI/CD'],
-    assignee: { id: 'u4', name: 'Budi Santoso', avatarColor: '#8b5cf6' },
+    assignees: [{ id: 'u4', name: 'Budi Santoso', avatarColor: '#8b5cf6' }],
     subtasks: [
       { id: 's5-1', title: 'Setup workflow YAML lint & test', completed: true },
       { id: 's5-2', title: 'Build Docker image & push ke registry', completed: true },
@@ -135,7 +162,7 @@ export const INITIAL_TASKS: Task[] = [
     priority: 'low',
     dueDate: formatDate(7),
     tags: ['PWA', 'Marketing'],
-    assignee: { id: 'u2', name: 'Sarah Anindya', avatarColor: '#ec4899' },
+    assignees: [{ id: 'u2', name: 'Sarah Anindya', avatarColor: '#ec4899' }],
     subtasks: [
       { id: 's6-1', title: 'Riset library web-push', completed: false },
       { id: 's6-2', title: 'Desain banner izin notifikasi', completed: false },
@@ -174,7 +201,43 @@ export const STORAGE_KEYS = {
   TASKS: 'kanban_tasks_v1',
   LOGS: 'kanban_logs_v1',
   THEME: 'kanban_theme_v1',
+  ASSIGNEES: 'kanban_assignees_v1',
+  TAGS: 'kanban_tags_v1',
+  TOKEN_TIMERS: 'kanban_token_timers_v1',
+  SORT: 'kanban_sort_v1',
 };
+
+export const DEFAULT_TAGS = ['Frontend', 'Backend', 'UI/UX', 'Bug', 'Feature', 'DevOps', 'Security', 'Database', 'Mobile'];
+
+const sameTag = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/** Adds every tag used by `taskList` that is missing from `directory` (case-insensitive). */
+export const mergeTaskTags = (directory: string[], taskList: Task[]): string[] => {
+  const result = [...directory];
+  taskList.forEach((t) =>
+    t.tags.forEach((tag) => {
+      if (tag.trim() && !result.some((d) => sameTag(d, tag))) result.push(tag.trim());
+    })
+  );
+  return result;
+};
+
+// Legacy tasks stored a single `assignee`; convert them to the `assignees` array
+export const normalizeTasks = (rawTasks: unknown[]): Task[] =>
+  rawTasks.map((raw) => {
+    const { assignee, assignees, links, media, subtasks, ...rest } = raw as Task & {
+      assignee?: Assignee;
+    };
+    // Media used to live on subtasks: move the first one to the task cover and strip the rest
+    const legacy = (subtasks ?? []) as (Subtask & { media?: MediaAttachment })[];
+    return {
+      ...rest,
+      media: media ?? legacy.find((st) => st.media)?.media,
+      subtasks: legacy.map(({ media: _legacyMedia, ...st }) => st),
+      assignees: Array.isArray(assignees) ? assignees : assignee ? [assignee] : [],
+      links: Array.isArray(links) ? links : [],
+    } as Task;
+  });
 
 export const loadFromStorage = <T>(key: string, defaultValue: T): T => {
   try {
@@ -202,4 +265,6 @@ export const DEFAULT_FILTER_STATE: FilterState = {
   assignees: [],
   dueFilter: 'all',
   sortBy: 'custom',
+  sortReverse: false,
+  complexity: 'all',
 };

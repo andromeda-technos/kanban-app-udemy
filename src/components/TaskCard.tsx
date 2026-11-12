@@ -1,4 +1,10 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
+import { SortableChecklist } from './SortableChecklist';
+import { SubtaskNote } from './SubtaskNote';
+import { MediaEditor, MediaView } from './TaskMedia';
+import { useFiles } from '../context/FilesContext';
+import { FileChip } from './datacenter/FileBits';
+import { AttachButton, AttachFilesDialog } from './datacenter/TaskFiles';
 import { Task } from '../types/kanban';
 import { useKanban } from '../context/KanbanContext';
 import {
@@ -10,7 +16,14 @@ import {
   AlertCircle,
   Edit2,
   Trash2,
+  ExternalLink,
+  ImagePlus,
+  ImageOff,
+  Paperclip,
 } from 'lucide-react';
+import { getHostname, getLinkKind } from '../utils/links';
+
+const MAX_VISIBLE_LINKS = 3;
 
 interface TaskCardProps {
   task: Task;
@@ -25,12 +38,29 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   isFirstColumn,
   isLastColumn,
 }) => {
-  const { deleteTask, quickMoveTask, toggleSubtask } = useKanban();
+  const { deleteTask, quickMoveTask, toggleSubtask, reorderSubtasks, updateSubtaskNote, updateTaskMedia } =
+    useKanban();
+  const { enabled: filesEnabled, filesForTask } = useFiles();
+  const taskFiles = filesEnabled ? filesForTask(task.id) : [];
+  const taskLevelFiles = taskFiles.filter((f) => !f.subtaskId);
+  const [attachTarget, setAttachTarget] = useState<{ title: string; subtaskId?: string } | null>(null);
+  const [noteEditingId, setNoteEditingId] = useState<string | null>(null);
+  const [editingMedia, setEditingMedia] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  // True while the pointer went down inside the checklist: that gesture reorders subtasks,
+  // so the card itself must not start a (native) drag
+  const pointerInChecklistRef = useRef(false);
   const [showSubtasks, setShowSubtasks] = useState(false);
+  const [showAllLinks, setShowAllLinks] = useState(false);
+  const links = task.links ?? [];
+  const visibleLinks = showAllLinks ? links : links.slice(0, MAX_VISIBLE_LINKS);
 
   // Drag handlers
   const handleDragStart = (e: React.DragEvent) => {
+    if (pointerInChecklistRef.current) {
+      e.preventDefault();
+      return;
+    }
     e.dataTransfer.setData('text/plain', task.id);
     e.dataTransfer.effectAllowed = 'move';
     e.currentTarget.classList.add('opacity-40', 'scale-95');
@@ -92,11 +122,34 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   return (
     <div
       draggable
+      onPointerDownCapture={(e) => {
+        pointerInChecklistRef.current = !!(e.target as HTMLElement).closest('[data-checklist]');
+      }}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       data-task-id={task.id}
       className="group relative bg-white dark:bg-slate-900 rounded-xl p-4 border border-slate-200/80 dark:border-slate-800 shadow-sm hover:shadow-md transition-all duration-200 cursor-grab active:cursor-grabbing hover:border-blue-400/50 dark:hover:border-blue-500/40 select-none"
     >
+      {/* Cover media: photo / GIF / looping video for some lofi vibes */}
+      {task.media && (
+        <MediaView
+          variant="cover"
+          media={task.media}
+          title={task.title}
+          className="-mx-4 -mt-4 mb-3"
+          onReplace={() => setEditingMedia(true)}
+          onRemove={() => updateTaskMedia(task.id, undefined)}
+        />
+      )}
+      {editingMedia && (
+        <div data-checklist className="mb-3">
+          <MediaEditor
+            onChange={(media) => updateTaskMedia(task.id, media)}
+            onClose={() => setEditingMedia(false)}
+          />
+        </div>
+      )}
+
       {/* Header row: Priority & Options */}
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-1.5 flex-wrap">
@@ -144,7 +197,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
                 className="fixed inset-0 z-10"
                 onClick={() => setShowMenu(false)}
               />
-              <div className="absolute right-0 top-full mt-1 w-36 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg z-20 py-1 text-xs">
+              <div className="absolute right-0 top-full mt-1 w-52 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg z-20 py-1 text-xs">
                 <button
                   type="button"
                   onClick={() => {
@@ -156,6 +209,47 @@ export const TaskCard: React.FC<TaskCardProps> = ({
                   <Edit2 className="w-3.5 h-3.5 text-blue-500" />
                   Edit Tugas
                 </button>
+
+                {/* Task cover media (photo / GIF / looping video) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMenu(false);
+                    setEditingMedia(true);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/60"
+                >
+                  <ImagePlus className="w-3.5 h-3.5 text-blue-500" />
+                  {task.media ? 'Ganti Media' : 'Tambahkan Media'}
+                </button>
+                {task.media && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowMenu(false);
+                      updateTaskMedia(task.id, undefined);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/60"
+                  >
+                    <ImageOff className="w-3.5 h-3.5 text-slate-400" />
+                    Hapus Media
+                  </button>
+                )}
+                {filesEnabled && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowMenu(false);
+                      setAttachTarget({ title: `File · ${task.title}` });
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/60"
+                  >
+                    <Paperclip className="w-3.5 h-3.5 text-blue-500" />
+                    Lampirkan File
+                    {taskFiles.length > 0 && <span className="ml-auto text-[10px] text-slate-400">{taskFiles.length}</span>}
+                  </button>
+                )}
+                <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
                 <button
                   type="button"
                   onClick={() => {
@@ -204,6 +298,66 @@ export const TaskCard: React.FC<TaskCardProps> = ({
         </div>
       )}
 
+      {/* Work files from Pusat Data linked to the task itself */}
+      {taskLevelFiles.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1 mb-3">
+          {taskLevelFiles.slice(0, 4).map((f) => (
+            <FileChip key={f.id} file={f} compact />
+          ))}
+          {taskLevelFiles.length > 4 && (
+            <button
+              type="button"
+              onClick={() => setAttachTarget({ title: `File · ${task.title}` })}
+              className="text-[10px] font-semibold text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              +{taskLevelFiles.length - 4} file
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Attached links (documents to review etc.) — open in a new tab */}
+      {links.length > 0 && (
+        <div className="flex flex-col gap-1 mb-3">
+          {visibleLinks.map((link) => {
+            const kind = getLinkKind(link.url);
+            const KindIcon = kind.icon;
+            return (
+              <a
+                key={link.id}
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                draggable={false}
+                onClick={(e) => e.stopPropagation()}
+                title={`${kind.label}: ${link.url}`}
+                className="group/link flex items-center gap-2 px-2 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/60 hover:border-blue-400/60 hover:bg-blue-50/60 dark:hover:bg-blue-950/30 transition-colors"
+              >
+                <KindIcon className={`w-3.5 h-3.5 shrink-0 ${kind.className}`} />
+                <span className="text-xs font-medium text-slate-700 dark:text-slate-200 truncate flex-1 group-hover/link:text-blue-600 dark:group-hover/link:text-blue-400">
+                  {link.title}
+                </span>
+                {link.title !== getHostname(link.url) && (
+                  <span className="text-[10px] text-slate-400 truncate max-w-[80px] shrink-0">
+                    {getHostname(link.url)}
+                  </span>
+                )}
+                <ExternalLink className="w-3 h-3 shrink-0 text-slate-400 group-hover/link:text-blue-500" />
+              </a>
+            );
+          })}
+          {links.length > MAX_VISIBLE_LINKS && (
+            <button
+              type="button"
+              onClick={() => setShowAllLinks(!showAllLinks)}
+              className="self-start text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline px-1"
+            >
+              {showAllLinks ? 'Tampilkan lebih sedikit' : `+${links.length - MAX_VISIBLE_LINKS} link lainnya`}
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Subtasks Progress */}
       {totalSubtasks > 0 && (
         <div className="mb-3">
@@ -234,23 +388,59 @@ export const TaskCard: React.FC<TaskCardProps> = ({
 
           {/* Collapsible Subtasks Checklist */}
           {showSubtasks && (
-            <div className="mt-2.5 pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
-              {task.subtasks.map((st) => (
-                <label
-                  key={st.id}
-                  className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
-                >
-                  <input
-                    type="checkbox"
-                    checked={st.completed}
-                    onChange={() => toggleSubtask(task.id, st.id)}
-                    className="w-3.5 h-3.5 rounded text-blue-600 border-slate-300 focus:ring-blue-500 focus:ring-1"
-                  />
-                  <span className={st.completed ? 'line-through text-slate-400 dark:text-slate-500' : ''}>
-                    {st.title}
-                  </span>
-                </label>
-              ))}
+            <div data-checklist className="mt-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <SortableChecklist
+                compact
+                items={task.subtasks}
+                onReorder={(next) => reorderSubtasks(task.id, next)}
+                className="space-y-1"
+                renderItem={(st, handle, isDragging) => (
+                  <div className={`group/strow px-1 py-0.5 rounded-md ${isDragging ? 'bg-white dark:bg-slate-800' : ''}`}>
+                    <div className="flex items-center gap-1.5">
+                      {handle}
+                      <label className="flex items-center gap-2 flex-1 min-w-0 text-xs text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={st.completed}
+                          onChange={() => {
+                            toggleSubtask(task.id, st.id);
+                            // Just finished → offer a quick completion note
+                            setNoteEditingId(st.completed ? null : st.id);
+                          }}
+                          className="w-3.5 h-3.5 shrink-0 rounded text-blue-600 border-slate-300 focus:ring-blue-500 focus:ring-1"
+                        />
+                        <span className={st.completed ? 'line-through text-slate-400 dark:text-slate-500' : ''}>
+                          {st.title}
+                        </span>
+                      </label>
+                      {filesEnabled && (
+                        <AttachButton
+                          compact
+                          count={taskFiles.filter((f) => f.subtaskId === st.id).length}
+                          title="Lampirkan file ke subtugas ini"
+                          onClick={() => setAttachTarget({ title: `File · ${st.title}`, subtaskId: st.id })}
+                        />
+                      )}
+                    </div>
+                    {taskFiles.some((f) => f.subtaskId === st.id) && (
+                      <div className="ml-9 mt-0.5 mb-0.5 flex flex-wrap gap-1">
+                        {taskFiles
+                          .filter((f) => f.subtaskId === st.id)
+                          .map((f) => (
+                            <FileChip key={f.id} file={f} compact />
+                          ))}
+                      </div>
+                    )}
+                    <SubtaskNote
+                      compact
+                      subtask={st}
+                      editing={noteEditingId === st.id}
+                      onEditingChange={(on) => setNoteEditingId(on ? st.id : null)}
+                      onSave={(note) => updateSubtaskNote(task.id, st.id, note)}
+                    />
+                  </div>
+                )}
+              />
             </div>
           )}
         </div>
@@ -259,17 +449,32 @@ export const TaskCard: React.FC<TaskCardProps> = ({
       {/* Footer: Assignee & Quick Move Controls */}
       <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800/80">
         {/* Assignee */}
-        {task.assignee ? (
-          <div className="flex items-center gap-2" title={`Ditugaskan ke: ${task.assignee.name}`}>
-            <div
-              className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold text-white shadow-xs"
-              style={{ backgroundColor: task.assignee.avatarColor }}
-            >
-              {task.assignee.name.charAt(0).toUpperCase()}
+        {task.assignees.length > 0 ? (
+          <div
+            className="flex items-center gap-2 min-w-0"
+            title={`Ditugaskan ke: ${task.assignees.map((a) => a.name).join(', ')}`}
+          >
+            <div className="flex -space-x-2">
+              {task.assignees.slice(0, 3).map((a) => (
+                <div
+                  key={a.id}
+                  className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold text-white shadow-xs ring-2 ring-white dark:ring-slate-900"
+                  style={{ backgroundColor: a.avatarColor }}
+                >
+                  {a.name.charAt(0).toUpperCase()}
+                </div>
+              ))}
+              {task.assignees.length > 3 && (
+                <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-200 ring-2 ring-white dark:ring-slate-900">
+                  +{task.assignees.length - 3}
+                </div>
+              )}
             </div>
-            <span className="text-xs text-slate-600 dark:text-slate-300 font-medium truncate max-w-[100px]">
-              {task.assignee.name.split(' ')[0]}
-            </span>
+            {task.assignees.length === 1 && (
+              <span className="text-xs text-slate-600 dark:text-slate-300 font-medium truncate max-w-[100px]">
+                {task.assignees[0].name.split(' ')[0]}
+              </span>
+            )}
           </div>
         ) : (
           <span className="text-[11px] text-slate-400 dark:text-slate-500 italic">
@@ -302,6 +507,14 @@ export const TaskCard: React.FC<TaskCardProps> = ({
           )}
         </div>
       </div>
+
+      {attachTarget && (
+        <AttachFilesDialog
+          title={attachTarget.title}
+          link={{ taskId: task.id, subtaskId: attachTarget.subtaskId }}
+          onClose={() => setAttachTarget(null)}
+        />
+      )}
     </div>
   );
 };

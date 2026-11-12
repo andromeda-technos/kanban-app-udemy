@@ -1,5 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { KanbanProvider, useKanban } from './context/KanbanContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { AuthGate } from './components/AuthGate';
+import { BrandingProvider } from './context/BrandingContext';
+import { SyncOverlay } from './components/SyncOverlay';
+import { FilesProvider } from './context/FilesContext';
+import { DataCenterModal } from './components/datacenter/DataCenterModal';
 import { Navbar } from './components/Navbar';
 import { BoardView } from './components/BoardView';
 import { TaskModal } from './components/TaskModal';
@@ -9,10 +15,26 @@ import { FilterDrawer } from './components/FilterDrawer';
 import { AnalyticsModal } from './components/AnalyticsModal';
 import { ActivityLogModal } from './components/ActivityLogModal';
 import { ShortcutsModal } from './components/ShortcutsModal';
+import { GlobalSettingsModal, SettingsTab } from './components/GlobalSettingsModal';
+import { TokenTimerNotifier } from './components/TokenTimerNotifier';
+import { TokenTimerFab } from './components/TokenTimerFab';
+import { PomodoroFab } from './components/PomodoroFab';
+import { RadialMenu } from './components/RadialMenu';
+import { GeometricBackground } from './components/GeometricBackground';
+import { PixelNightBackground } from './components/PixelNightBackground';
+import { ClawdCompanion } from './components/Clawd';
+import { PREF_KEYS, usePreference } from './hooks/usePreference';
 import { Task, Column, Board } from './types/kanban';
 
 const KanbanDashboard: React.FC = () => {
-  const { activeBoard } = useKanban();
+  const { activeBoard, theme } = useKanban();
+  const [pixelFont] = usePreference(PREF_KEYS.PIXEL_FONT, true);
+  const [pixelBg] = usePreference(PREF_KEYS.PIXEL_BG, true);
+
+  // 16-bit look: the pixel font is applied to the whole page
+  useEffect(() => {
+    document.documentElement.classList.toggle('font-pixel', pixelFont);
+  }, [pixelFont]);
 
   // Modals state
   const [taskModalOpen, setTaskModalOpen] = useState(false);
@@ -29,6 +51,17 @@ const KanbanDashboard: React.FC = () => {
   const [analyticsModalOpen, setAnalyticsModalOpen] = useState(false);
   const [logsModalOpen, setLogsModalOpen] = useState(false);
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('assignees');
+  // Only one floating panel (AI token timers / Pomodoro) is open at a time
+  const [floatingPanel, setFloatingPanel] = useState<'timers' | 'pomodoro' | null>(null);
+  const timerPanelOpen = floatingPanel === 'timers';
+  const setTimerPanelOpen = (open: boolean) => setFloatingPanel(open ? 'timers' : null);
+  const [dataCenterOpen, setDataCenterOpen] = useState(false);
+  const openSettings = (tab: SettingsTab = 'assignees') => {
+    setSettingsTab(tab);
+    setSettingsModalOpen(true);
+  };
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -42,6 +75,9 @@ const KanbanDashboard: React.FC = () => {
         activeEl?.tagName === 'SELECT';
 
       // Escape to close any modal
+      // An inline editor already handled this Esc (e.g. cancelling a note) → keep modals open
+      if (e.key === 'Escape' && e.defaultPrevented) return;
+
       if (e.key === 'Escape') {
         setTaskModalOpen(false);
         setColumnModalOpen(false);
@@ -50,6 +86,9 @@ const KanbanDashboard: React.FC = () => {
         setAnalyticsModalOpen(false);
         setLogsModalOpen(false);
         setShortcutsModalOpen(false);
+        setSettingsModalOpen(false);
+        setFloatingPanel(null);
+        setDataCenterOpen(false);
         return;
       }
 
@@ -113,16 +152,18 @@ const KanbanDashboard: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 transition-colors">
+    <div className="relative isolate flex flex-col min-h-screen w-full overflow-x-clip bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 transition-colors">
+      {/* Decorative animated background (behind everything, ignores the mouse) */}
+      {pixelBg ? <PixelNightBackground theme={theme} /> : <GeometricBackground theme={theme} />}
+
       {/* Top Navbar */}
       <Navbar
         onOpenNewTask={() => handleOpenNewTask()}
         onOpenNewBoard={handleOpenNewBoard}
         onEditBoard={handleEditBoard}
         onOpenFilters={() => setFilterDrawerOpen(true)}
-        onOpenAnalytics={() => setAnalyticsModalOpen(true)}
-        onOpenLogs={() => setLogsModalOpen(true)}
         onOpenShortcuts={() => setShortcutsModalOpen(true)}
+        onOpenSettings={() => openSettings('assignees')}
         searchInputRef={searchInputRef}
       />
 
@@ -132,6 +173,7 @@ const KanbanDashboard: React.FC = () => {
         onEditTask={handleEditTask}
         onAddColumn={handleOpenNewColumn}
         onEditColumn={handleEditColumn}
+        onOpenTimers={() => setTimerPanelOpen(true)}
       />
 
       {/* Modals & Drawers */}
@@ -140,6 +182,7 @@ const KanbanDashboard: React.FC = () => {
         onClose={() => setTaskModalOpen(false)}
         taskToEdit={taskToEdit}
         defaultColumnId={taskDefaultColumnId}
+        onOpenSettings={openSettings}
       />
 
       <ColumnModal
@@ -173,15 +216,64 @@ const KanbanDashboard: React.FC = () => {
         isOpen={shortcutsModalOpen}
         onClose={() => setShortcutsModalOpen(false)}
       />
+
+      {/* Rendered last so it stacks above TaskModal when opened from there */}
+      <GlobalSettingsModal
+        isOpen={settingsModalOpen}
+        onClose={() => setSettingsModalOpen(false)}
+        initialTab={settingsTab}
+      />
+
+      {/* Token refresh alerts (toasts + browser notifications) */}
+      <TokenTimerNotifier onOpenTimers={() => setTimerPanelOpen(true)} />
+
+      {/* Floating AI token timer menu (bottom-right) */}
+      <TokenTimerFab isOpen={timerPanelOpen} onOpenChange={setTimerPanelOpen} />
+
+      {/* Radial quick menu (bottom-right stack, above Pomodoro): Pusat Data, Statistik, Riwayat */}
+      <RadialMenu
+        onOpenDataCenter={() => setDataCenterOpen(true)}
+        onOpenAnalytics={() => setAnalyticsModalOpen(true)}
+        onOpenLogs={() => setLogsModalOpen(true)}
+      />
+
+      {/* Pomodoro focus timer (floating, above the token timer button) */}
+      <PomodoroFab
+        isOpen={floatingPanel === 'pomodoro'}
+        onOpenChange={(open) => setFloatingPanel(open ? 'pomodoro' : null)}
+      />
+
+      {/* Clawd, the pixel companion walking along the bottom of the screen */}
+      <ClawdCompanion />
+
+      {/* Pusat Data: team work files in Google Drive */}
+      <DataCenterModal isOpen={dataCenterOpen} onClose={() => setDataCenterOpen(false)} />
     </div>
+  );
+};
+
+/** Remount the Kanban state per signed-in account so one user's data never leaks to the next. */
+const KanbanApp: React.FC = () => {
+  const { user } = useAuth();
+  return (
+    <KanbanProvider key={user?.id ?? 'local'}>
+      <FilesProvider>
+        <KanbanDashboard />
+      </FilesProvider>
+      <SyncOverlay />
+    </KanbanProvider>
   );
 };
 
 export function App() {
   return (
-    <KanbanProvider>
-      <KanbanDashboard />
-    </KanbanProvider>
+    <AuthProvider>
+      <BrandingProvider>
+        <AuthGate>
+          <KanbanApp />
+        </AuthGate>
+      </BrandingProvider>
+    </AuthProvider>
   );
 }
 

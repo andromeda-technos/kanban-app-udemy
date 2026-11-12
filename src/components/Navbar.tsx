@@ -1,11 +1,9 @@
 import React, { useRef, useState } from 'react';
 import { useKanban } from '../context/KanbanContext';
+import { UserMenu } from './UserMenu';
 import {
-  Kanban,
   Search,
   Filter,
-  BarChart3,
-  History,
   Moon,
   Sun,
   Download,
@@ -17,16 +15,22 @@ import {
   Edit3,
   RotateCcw,
   HelpCircle,
+  Settings,
+  MoreVertical,
+  Type,
+  Sparkles,
+  MoonStar,
 } from 'lucide-react';
+import { PREF_KEYS, usePreference } from '../hooks/usePreference';
+import { BrandLogo, useBranding } from '../context/BrandingContext';
 
 interface NavbarProps {
   onOpenNewTask: () => void;
   onOpenNewBoard: () => void;
   onEditBoard: () => void;
   onOpenFilters: () => void;
-  onOpenAnalytics: () => void;
-  onOpenLogs: () => void;
   onOpenShortcuts: () => void;
+  onOpenSettings: () => void;
   searchInputRef: React.RefObject<HTMLInputElement | null>;
 }
 
@@ -35,9 +39,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenNewBoard,
   onEditBoard,
   onOpenFilters,
-  onOpenAnalytics,
-  onOpenLogs,
   onOpenShortcuts,
+  onOpenSettings,
   searchInputRef,
 }) => {
   const {
@@ -53,10 +56,15 @@ export const Navbar: React.FC<NavbarProps> = ({
     exportData,
     importData,
     resetToDemoData,
+    sync,
   } = useKanban();
 
   const [boardDropdownOpen, setBoardDropdownOpen] = useState(false);
   const [menuDropdownOpen, setMenuDropdownOpen] = useState(false);
+  const { branding } = useBranding();
+  const [pixelFont, setPixelFont] = usePreference(PREF_KEYS.PIXEL_FONT, true);
+  const [clawdOn, setClawdOn] = usePreference(PREF_KEYS.CLAWD, true);
+  const [pixelBg, setPixelBg] = usePreference(PREF_KEYS.PIXEL_BG, true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeFilterCount =
@@ -64,6 +72,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     filters.tags.length +
     filters.assignees.length +
     (filters.dueFilter !== 'all' ? 1 : 0) +
+    (filters.complexity !== 'all' ? 1 : 0) +
     (filters.sortBy !== 'custom' ? 1 : 0);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -82,32 +91,37 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className="sticky top-0 z-30 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800 transition-colors">
-      <div className="px-4 sm:px-6 py-2.5 flex items-center justify-between gap-3">
+      <div className="px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2 sm:gap-3">
         {/* Left: Brand & Board Switcher */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2.5 font-black text-slate-800 dark:text-slate-100 text-lg tracking-tight">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
-              <Kanban className="w-5 h-5" />
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <div className="flex items-center gap-2.5 font-black text-slate-800 dark:text-slate-100 text-lg tracking-tight min-w-0">
+            <BrandLogo spec={branding.logo} />
+            <div className="hidden sm:block min-w-0 max-w-[220px]">
+              <span className="block truncate leading-tight bg-gradient-to-r from-blue-600 to-indigo-500 bg-clip-text text-transparent">
+                {branding.appName}
+              </span>
+              {branding.tagline && (
+                <span className="block truncate text-[10px] font-medium tracking-normal text-slate-400 dark:text-slate-500">
+                  {branding.tagline}
+                </span>
+              )}
             </div>
-            <span className="hidden sm:inline bg-gradient-to-r from-blue-600 to-indigo-500 bg-clip-text text-transparent">
-              KanbanFlow
-            </span>
           </div>
 
           <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 hidden sm:block" />
 
           {/* Board Selector */}
-          <div className="relative">
+          <div className="relative min-w-0">
             <button
               type="button"
               onClick={() => setBoardDropdownOpen(!boardDropdownOpen)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-200/80 dark:border-slate-700/80 bg-slate-50 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 transition-colors"
+              className="flex items-center gap-2 max-w-full px-2.5 sm:px-3 py-1.5 rounded-xl border border-slate-200/80 dark:border-slate-700/80 bg-slate-50 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 transition-colors"
             >
-              <Layers className="w-3.5 h-3.5 text-blue-500" />
-              <span className="truncate max-w-[140px] sm:max-w-[200px]">
+              <Layers className="w-3.5 h-3.5 shrink-0 text-blue-500" />
+              <span className="truncate max-w-[120px] sm:max-w-[200px]">
                 {activeBoard?.title || 'Pilih Papan'}
               </span>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+              <ChevronDown className="w-3.5 h-3.5 shrink-0 text-slate-400" />
             </button>
 
             {boardDropdownOpen && (
@@ -215,7 +229,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         {/* Right: Quick Actions */}
-        <div className="flex items-center gap-1.5 sm:gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {/* Filter button */}
           <button
             type="button"
@@ -236,25 +250,18 @@ export const Navbar: React.FC<NavbarProps> = ({
             )}
           </button>
 
-          {/* Analytics button */}
+          {/* Global Settings button */}
           <button
             type="button"
-            onClick={onOpenAnalytics}
-            className="p-2 rounded-xl border border-slate-200/80 dark:border-slate-700/80 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-            title="Statistik Proyek"
+            onClick={onOpenSettings}
+            className="hidden sm:flex p-2 rounded-xl border border-slate-200/80 dark:border-slate-700/80 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+            title="Global Settings"
           >
-            <BarChart3 className="w-4 h-4" />
+            <Settings className="w-4 h-4" />
           </button>
 
-          {/* Activity log button */}
-          <button
-            type="button"
-            onClick={onOpenLogs}
-            className="p-2 rounded-xl border border-slate-200/80 dark:border-slate-700/80 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors hidden sm:flex"
-            title="Riwayat Aktivitas"
-          >
-            <History className="w-4 h-4" />
-          </button>
+          {/* Google account + cloud sync status */}
+          <UserMenu />
 
           {/* More Menu (Export, Import, Demo Data, Shortcuts) */}
           <div className="relative">
@@ -264,7 +271,8 @@ export const Navbar: React.FC<NavbarProps> = ({
               className="p-2 rounded-xl border border-slate-200/80 dark:border-slate-700/80 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
               title="Menu Tambahan"
             >
-              <Download className="w-4 h-4" />
+              <MoreVertical className="w-4 h-4 sm:hidden" />
+              <Download className="w-4 h-4 hidden sm:block" />
             </button>
 
             {menuDropdownOpen && (
@@ -273,7 +281,57 @@ export const Navbar: React.FC<NavbarProps> = ({
                   className="fixed inset-0 z-20"
                   onClick={() => setMenuDropdownOpen(false)}
                 />
-                <div className="absolute right-0 top-full mt-1.5 w-52 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-30 p-1.5 text-xs">
+                <div className="absolute right-0 top-full mt-1.5 w-56 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-30 p-1.5 text-xs">
+                  {/* Phone: navbar buttons that don't fit live here */}
+                  <div className="sm:hidden">
+                    {[
+                      { label: 'Global Settings', icon: Settings, color: 'text-slate-500', action: onOpenSettings },
+                      {
+                        label: theme === 'dark' ? 'Mode Terang' : 'Mode Gelap',
+                        icon: theme === 'dark' ? Sun : Moon,
+                        color: theme === 'dark' ? 'text-amber-400' : 'text-slate-500',
+                        action: toggleTheme,
+                      },
+                    ].map(({ label, icon: Icon, color, action }) => (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={() => {
+                          setMenuDropdownOpen(false);
+                          action();
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700"
+                      >
+                        <Icon className={`w-3.5 h-3.5 ${color}`} />
+                        {label}
+                      </button>
+                    ))}
+                    <div className="border-t border-slate-100 dark:border-slate-700 my-1" />
+                  </div>
+                  {/* Appearance */}
+                  <p className="px-3 pt-1.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Tampilan</p>
+                  {[
+                    { label: 'Font 16-bit', icon: Type, color: 'text-fuchsia-500', on: pixelFont, toggle: () => setPixelFont(!pixelFont) },
+                    { label: 'Clawd (teman kerja)', icon: Sparkles, color: 'text-orange-500', on: clawdOn, toggle: () => setClawdOn(!clawdOn) },
+                    { label: 'Latar pixel malam', icon: MoonStar, color: 'text-indigo-400', on: pixelBg, toggle: () => setPixelBg(!pixelBg) },
+                  ].map(({ label, icon: Icon, color, on, toggle }) => (
+                    <button
+                      key={label}
+                      type="button"
+                      role="switch"
+                      aria-checked={on}
+                      onClick={toggle}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700"
+                    >
+                      <Icon className={`w-3.5 h-3.5 ${color}`} />
+                      <span className="flex-1 text-left">{label}</span>
+                      <span className={`relative w-7 h-4 rounded-full transition-colors ${on ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'}`}>
+                        <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all ${on ? 'left-3.5' : 'left-0.5'}`} />
+                      </span>
+                    </button>
+                  ))}
+                  <div className="border-t border-slate-100 dark:border-slate-700 my-1" />
+
                   <button
                     type="button"
                     onClick={() => {
@@ -300,6 +358,8 @@ export const Navbar: React.FC<NavbarProps> = ({
 
                   <div className="border-t border-slate-100 dark:border-slate-700 my-1" />
 
+                  {/* Demo reset would overwrite the whole team's data in cloud mode → local mode only */}
+                  {sync.status === 'local' && (
                   <button
                     type="button"
                     onClick={() => {
@@ -313,6 +373,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <RotateCcw className="w-3.5 h-3.5 text-amber-500" />
                     Muat Ulang Data Contoh
                   </button>
+                  )}
 
                   <button
                     type="button"
@@ -320,7 +381,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       setMenuDropdownOpen(false);
                       onOpenShortcuts();
                     }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700"
+                    className="w-full hidden sm:flex items-center gap-2 px-3 py-2 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700"
                   >
                     <HelpCircle className="w-3.5 h-3.5 text-indigo-500" />
                     Pintasan Keyboard
@@ -343,7 +404,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             type="button"
             onClick={toggleTheme}
-            className="p-2 rounded-xl border border-slate-200/80 dark:border-slate-700/80 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+            className="hidden sm:flex p-2 rounded-xl border border-slate-200/80 dark:border-slate-700/80 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
             title={theme === 'dark' ? 'Ganti ke Mode Terang' : 'Ganti ke Mode Gelap'}
           >
             {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-slate-600" />}
@@ -353,11 +414,26 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             type="button"
             onClick={onOpenNewTask}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-500/20 active:scale-95 transition-all"
+            className="flex items-center gap-1.5 p-2 sm:px-3.5 rounded-xl text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-500/20 active:scale-95 transition-all"
+            title="Tugas Baru (N)"
           >
             <Plus className="w-4 h-4" />
-            <span>Tugas Baru</span>
+            <span className="hidden sm:inline">Tugas Baru</span>
           </button>
+        </div>
+      </div>
+
+      {/* Phone/tablet: search gets its own row (hidden in the top bar below md) */}
+      <div className="md:hidden px-3 pb-2.5">
+        <div className="relative">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="search"
+            value={filters.search}
+            onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value }))}
+            placeholder="Cari tugas, tag, atau orang..."
+            className="w-full pl-9 pr-3 py-2 text-xs bg-slate-100/80 dark:bg-slate-800/80 border border-slate-200/80 dark:border-slate-700/80 rounded-xl text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
         </div>
       </div>
     </header>
