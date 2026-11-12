@@ -232,8 +232,8 @@ export const MediaEditor: React.FC<{
     try {
       onChange(await saveUpload(file));
       onClose();
-    } catch {
-      setError('Gagal menyimpan file di browser (penyimpanan penuh atau mode privat?).');
+    } catch (err) {
+      setError((err as Error).message || 'Gagal menyimpan sampul.');
     } finally {
       setUploading(false);
     }

@@ -68,11 +68,32 @@ const isSignedIn = async () => {
  */
 export const saveUpload = async (file: File): Promise<MediaAttachment> => {
   if (await isSignedIn()) {
-    return { kind: kindOf(file.type), storagePath: await uploadToCloud(file, file.name), name: file.name };
+    try {
+      return { kind: kindOf(file.type), storagePath: await uploadToCloud(file, file.name), name: file.name };
+    } catch (e) {
+      throw new Error(describeCloudError((e as Error).message));
+    }
   }
   const fileId = `media-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-  await putMediaFile(fileId, file);
+  try {
+    await putMediaFile(fileId, file);
+  } catch {
+    throw new Error('Gagal menyimpan file di browser (penyimpanan penuh atau mode privat?).');
+  }
   return { kind: kindOf(file.type), fileId, name: file.name };
+};
+
+/** Supabase Storage error → what the user should do about it. */
+const describeCloudError = (raw: string): string => {
+  const msg = raw || 'unknown error';
+  if (/bucket not found/i.test(msg))
+    return 'Tempat penyimpanan sampul ("covers") belum dibuat di Supabase. Jalankan bagian Storage di supabase/schema.sql lewat SQL Editor.';
+  if (/row-level security|unauthorized|not allowed|permission|403/i.test(msg))
+    return 'Akun ini belum diizinkan mengunggah sampul ke penyimpanan tim. Pastikan email terdaftar di Global Settings → Tim dan kebijakan Storage di supabase/schema.sql sudah dijalankan.';
+  if (/exceed|too large|maximum allowed size|413/i.test(msg)) return 'Ukuran file melebihi batas penyimpanan sampul (25 MB).';
+  if (/mime|content type/i.test(msg)) return 'Tipe file ini ditolak penyimpanan. Gunakan gambar (JPG, PNG, GIF, WebP) atau video (MP4, WebM).';
+  if (/failed to fetch|network/i.test(msg)) return 'Koneksi ke Supabase terputus. Coba lagi.';
+  return `Gagal mengunggah sampul: ${msg}`;
 };
 
 /** One-time move of covers stored in this browser (IndexedDB) to Supabase Storage. */
