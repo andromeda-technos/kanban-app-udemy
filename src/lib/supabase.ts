@@ -27,3 +27,15 @@ export const isSupabaseConfigured = supabase !== null;
 
 /** Google scopes requested at sign-in. `drive.file` = only files this app creates or the user picks. */
 export const GOOGLE_SCOPES = 'openid email profile https://www.googleapis.com/auth/drive.file';
+
+/** Names of required env variables that are empty (shown on the "config missing" screen). */
+export const missingEnvVars = (): string[] => {
+  const env = import.meta.env;
+  return [
+    'VITE_SUPABASE_URL',
+    'VITE_SUPABASE_ANON_KEY',
+    'VITE_GOOGLE_CLIENT_ID',
+    'VITE_GOOGLE_API_KEY',
+    'VITE_GOOGLE_APP_ID',
+  ].filter((k) => !clean((env as Record<string, string | undefined>)[k]));
+};
