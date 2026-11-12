@@ -39,7 +39,7 @@ export const TokenTimerFab: React.FC<TokenTimerFabProps> = ({ isOpen, onOpenChan
         <div
           role="dialog"
           aria-label="Timer Token AI"
-          className="fixed bottom-[196px] right-4 z-40 w-[calc(100vw-2rem)] max-w-[400px] max-h-[calc(100dvh-14rem)] flex flex-col bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 origin-bottom-right animate-[toast-in_220ms_cubic-bezier(0.22,1,0.36,1)]"
+          className="fixed bottom-[256px] right-4 z-40 w-[calc(100vw-2rem)] max-w-[400px] max-h-[calc(100dvh-18rem)] flex flex-col bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 origin-bottom-right animate-[toast-in_220ms_cubic-bezier(0.22,1,0.36,1)]"
         >
           <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-100 dark:border-slate-800">
             <div>

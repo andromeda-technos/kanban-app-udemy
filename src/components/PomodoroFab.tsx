@@ -210,6 +210,18 @@ export const PomodoroFab: React.FC<{ isOpen: boolean; onOpenChange: (open: boole
   };
   const pause = () =>
     setSt((p) => ({ ...p, running: false, remainingMs: p.endsAt ? Math.max(0, p.endsAt - Date.now()) : p.remainingMs, endsAt: null }));
+  // Prayer time → pause the focus timer (event from PrayerFab)
+  useEffect(() => {
+    const onPause = () =>
+      setSt((p) =>
+        p.running
+          ? { ...p, running: false, remainingMs: p.endsAt ? Math.max(0, p.endsAt - Date.now()) : p.remainingMs, endsAt: null }
+          : p
+      );
+    window.addEventListener('pomodoro-pause', onPause);
+    return () => window.removeEventListener('pomodoro-pause', onPause);
+  }, []);
+
   const reset = () => setSt((p) => ({ ...p, running: false, endsAt: null, remainingMs: durationOf(p.phase, p.settings) }));
   const skip = () => setSt((p) => goToNext({ ...p, running: false }, false));
 
@@ -237,7 +249,7 @@ export const PomodoroFab: React.FC<{ isOpen: boolean; onOpenChange: (open: boole
           role="dialog"
           aria-label="Pomodoro"
           aria-hidden={!isOpen}
-          className={`fixed bottom-[196px] right-4 z-40 w-[calc(100vw-2rem)] max-w-[360px] max-h-[calc(100dvh-14rem)] flex flex-col bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 origin-bottom-right transition-[opacity,transform,visibility] duration-200 ${
+          className={`fixed bottom-[256px] right-4 z-40 w-[calc(100vw-2rem)] max-w-[360px] max-h-[calc(100dvh-18rem)] flex flex-col bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 origin-bottom-right transition-[opacity,transform,visibility] duration-200 ${
             isOpen ? 'opacity-100 scale-100 visible' : 'opacity-0 scale-95 translate-y-2 invisible pointer-events-none'
           }`}
         >

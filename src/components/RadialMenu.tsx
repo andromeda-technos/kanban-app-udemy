@@ -19,7 +19,7 @@ interface Item {
 const AUTO_CLOSE_MS = 5000;
 
 /**
- * Quick menu stacked with the Pomodoro and AI-token timer buttons (bottom-right, on top).
+ * Quick menu on top of the bottom-right button stack (prayer, Pomodoro, AI-token timer below).
  * Items fan out up and to the left in a quarter circle, so the timer buttons below stay
  * visible and clickable. Closes by itself after 5 s without interaction.
  */
@@ -77,7 +77,7 @@ export const RadialMenu: React.FC<RadialMenuProps> = ({ onOpenDataCenter, onOpen
   return (
     <div
       ref={rootRef}
-      className="fixed bottom-[136px] right-4 z-40"
+      className="fixed bottom-[196px] right-4 z-40"
       onPointerMove={open ? keepAlive : undefined}
       onPointerDown={open ? keepAlive : undefined}
       onFocus={open ? keepAlive : undefined}

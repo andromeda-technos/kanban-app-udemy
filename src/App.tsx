@@ -19,6 +19,7 @@ import { GlobalSettingsModal, SettingsTab } from './components/GlobalSettingsMod
 import { TokenTimerNotifier } from './components/TokenTimerNotifier';
 import { TokenTimerFab } from './components/TokenTimerFab';
 import { PomodoroFab } from './components/PomodoroFab';
+import { PrayerFab } from './components/PrayerFab';
 import { RadialMenu } from './components/RadialMenu';
 import { GeometricBackground } from './components/GeometricBackground';
 import { PixelNightBackground } from './components/PixelNightBackground';
@@ -54,7 +55,7 @@ const KanbanDashboard: React.FC = () => {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('assignees');
   // Only one floating panel (AI token timers / Pomodoro) is open at a time
-  const [floatingPanel, setFloatingPanel] = useState<'timers' | 'pomodoro' | null>(null);
+  const [floatingPanel, setFloatingPanel] = useState<'timers' | 'pomodoro' | 'prayer' | null>(null);
   const timerPanelOpen = floatingPanel === 'timers';
   const setTimerPanelOpen = (open: boolean) => setFloatingPanel(open ? 'timers' : null);
   const [dataCenterOpen, setDataCenterOpen] = useState(false);
@@ -235,6 +236,12 @@ const KanbanDashboard: React.FC = () => {
         onOpenDataCenter={() => setDataCenterOpen(true)}
         onOpenAnalytics={() => setAnalyticsModalOpen(true)}
         onOpenLogs={() => setLogsModalOpen(true)}
+      />
+
+      {/* Prayer times (manual schedule) — Clawd goes to pray */}
+      <PrayerFab
+        isOpen={floatingPanel === 'prayer'}
+        onOpenChange={(open) => setFloatingPanel(open ? 'prayer' : null)}
       />
 
       {/* Pomodoro focus timer (floating, above the token timer button) */}

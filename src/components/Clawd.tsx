@@ -22,7 +22,15 @@ const Px: React.FC<{ x: number; y: number; w?: number; h?: number; fill?: string
   className,
 }) => <rect x={x} y={y} width={w} height={h} fill={fill} className={className} />;
 
-const ClawdSprite: React.FC<{ pose: Pose; look: -1 | 0 | 1; size: number }> = ({ pose, look, size }) => {
+const PECI = '#17161c';
+const PECI_HI = '#3b3946';
+
+const ClawdSprite: React.FC<{ pose: Pose; look: -1 | 0 | 1; size: number; peci?: boolean }> = ({
+  pose,
+  look,
+  size,
+  peci = false,
+}) => {
   const armsUp = pose === 'happy' || pose === 'held';
   return (
     <svg
@@ -50,6 +58,15 @@ const ClawdSprite: React.FC<{ pose: Pose; look: -1 | 0 | 1; size: number }> = ({
         {/* body */}
         <Px x={2} y={2} w={9} h={5} />
         <Px x={2} y={6} w={9} h={1} fill={SHADE} />
+
+        {/* peci (black cap) for prayer time */}
+        {peci && (
+          <>
+            <Px x={4} y={0} w={5} h={1} fill={PECI} />
+            <Px x={3} y={1} w={7} h={1} fill={PECI} />
+            <Px x={4} y={0} fill={PECI_HI} />
+          </>
+        )}
 
         {/* arms */}
         {armsUp ? (
@@ -129,6 +146,15 @@ const greeting = () => {
 // Companion
 // ---------------------------------------------------------------------------
 const WALK_SPEED = 38; // px per second
+const AWAY_KEY = 'kanban_clawd_away_v1';
+const loadAway = (): { name: string; until: number } | null => {
+  try {
+    const a = JSON.parse(localStorage.getItem(AWAY_KEY) || 'null');
+    return a && a.until > Date.now() ? a : null;
+  } catch {
+    return null;
+  }
+};
 const SLEEP_AFTER_MS = 2 * 60_000;
 const RIGHT_RESERVE = 96; // keep clear of the timer button bottom-right
 
@@ -150,7 +176,18 @@ const Companion: React.FC = () => {
   const size = vw < 640 ? 44 : 56;
   const maxX = Math.max(16, vw - size - RIGHT_RESERVE);
 
-  const [x, setX] = useState(() => 16 + Math.random() * Math.min(240, maxX));
+  // Away for prayer (survives reloads until it's over)
+  const [away, setAway] = useState<{ name: string; until: number } | null>(loadAway);
+  const awayRef = useRef(away);
+  awayRef.current = away;
+  const [peci, setPeci] = useState(() => loadAway() !== null);
+  const offscreenX = -(size + 60);
+  const sizeRef = useRef(size);
+  sizeRef.current = size;
+  const maxXRef = useRef(maxX);
+  maxXRef.current = maxX;
+
+  const [x, setX] = useState(() => (loadAway() ? offscreenX : 16 + Math.random() * Math.min(240, maxX)));
   const [walkMs, setWalkMs] = useState(0); // > 0 while walking (transition length)
   const [look, setLook] = useState<-1 | 0 | 1>(0);
   const [mood, setMood] = useState<'idle' | 'happy' | 'sleep'>('idle');
@@ -175,11 +212,15 @@ const Companion: React.FC = () => {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
-  useEffect(() => setX((v) => Math.min(Math.max(12, v), maxX)), [maxX]);
+  useEffect(() => {
+    if (awayRef.current) return; // stays off-screen while praying
+    setX((v) => Math.min(Math.max(12, v), maxX));
+  }, [maxX]);
 
   // ---- speech ----------------------------------------------------------
   const bubbleTimer = useRef<number>(0);
-  const say = useCallback((text: string, ms = 5000) => {
+  const say = useCallback((text: string, ms = 5000, force = false) => {
+    if (awayRef.current && !force) return;
     window.clearTimeout(bubbleTimer.current);
     setBubble({ text, id: Date.now() });
     bubbleTimer.current = window.setTimeout(() => setBubble(null), ms);
@@ -187,6 +228,7 @@ const Companion: React.FC = () => {
 
   const celebrate = useCallback(
     (text: string) => {
+      if (awayRef.current) return;
       setMood('happy');
       setJumpKey((k) => k + 1);
       say(text, 4000);
@@ -251,7 +293,7 @@ const Companion: React.FC = () => {
   // ---- shooting star in the pixel night sky → jump for joy -----------------
   useEffect(() => {
     const onStar = () => {
-      if (moodRef.current === 'sleep') return; // let him sleep
+      if (moodRef.current === 'sleep' || awayRef.current) return; // let him sleep / he's praying
       setMood('happy');
       setJumpKey((k) => k + 1);
       later(() => setMood((m) => (m === 'happy' ? 'idle' : m)), 1800);
@@ -266,7 +308,7 @@ const Companion: React.FC = () => {
   useEffect(() => {
     const onSay = (e: Event) => {
       const { text, celebrate: party } = (e as CustomEvent<{ text: string; celebrate?: boolean }>).detail ?? {};
-      if (!text) return;
+      if (!text || awayRef.current) return;
       if (moodRef.current === 'sleep') setMood('idle');
       if (party) celebrate(text);
       else say(text, 6000);
@@ -288,13 +330,13 @@ const Companion: React.FC = () => {
   useEffect(() => {
     const onActivity = () => {
       lastActive.current = Date.now();
-      if (moodRef.current === 'sleep') {
+      if (moodRef.current === 'sleep' && !awayRef.current) {
         setMood('idle');
         say(pick(EVENT_LINES.wake), 3000);
       }
     };
     const check = window.setInterval(() => {
-      if (Date.now() - lastActive.current > SLEEP_AFTER_MS && moodRef.current === 'idle') {
+      if (Date.now() - lastActive.current > SLEEP_AFTER_MS && moodRef.current === 'idle' && !awayRef.current) {
         setMood('sleep');
         setWalkMs(0);
       }
@@ -314,7 +356,7 @@ const Companion: React.FC = () => {
   const xRef = useRef(x);
   xRef.current = x;
   useEffect(() => {
-    if (reducedMotion || mood !== 'idle' || held || walkMs > 0) return;
+    if (reducedMotion || mood !== 'idle' || held || walkMs > 0 || away) return;
     const id = window.setTimeout(() => {
       // Sometimes just look around instead of walking
       if (Math.random() < 0.35) {
@@ -342,7 +384,74 @@ const Companion: React.FC = () => {
     }, 3500 + Math.random() * 6000);
     return () => window.clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mood, held, walkMs, maxX, reducedMotion, tick]);
+  }, [mood, held, walkMs, maxX, reducedMotion, tick, away]);
+
+  // ---- prayer time: peci on, walk off-screen, come back later ---------------
+  useEffect(() => {
+    const onPrayer = (e: Event) => {
+      const { name, minutes } = (e as CustomEvent<{ name: string; minutes?: number }>).detail ?? {};
+      if (!name) return;
+      const a = { name, until: Date.now() + (minutes ?? 15) * 60_000 };
+      awayRef.current = a;
+      setAway(a);
+      try {
+        localStorage.setItem(AWAY_KEY, JSON.stringify(a));
+      } catch {
+        /* ignore */
+      }
+      setPeci(true);
+      setHeld(false);
+      setMood('idle');
+      setWalkMs(0);
+      setLook(-1);
+      say(`Waktunya shalat ${name} 🕌 Aku shalat dulu ya, nanti balik lagi.`, 3200, true);
+      later(() => {
+        setBubble(null);
+        const from = xRef.current;
+        const to = -(sizeRef.current + 60);
+        const ms = Math.max(900, ((from - to) / (WALK_SPEED * 1.6)) * 1000);
+        setLook(-1);
+        setWalkMs(ms);
+        setX(to);
+        later(() => setWalkMs(0), ms);
+      }, 3200);
+    };
+    window.addEventListener('clawd-prayer', onPrayer);
+    return () => window.removeEventListener('clawd-prayer', onPrayer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [say]);
+
+  useEffect(() => {
+    if (!away) return;
+    const id = window.setTimeout(() => {
+      const from = -(sizeRef.current + 60);
+      const to = 16 + Math.random() * Math.min(160, maxXRef.current);
+      const ms = Math.max(900, ((to - from) / (WALK_SPEED * 1.4)) * 1000);
+      setX(from);
+      setLook(1);
+      // next frame so the browser animates from the edge
+      requestAnimationFrame(() => {
+        setWalkMs(ms);
+        setX(to);
+      });
+      later(() => {
+        setWalkMs(0);
+        setLook(0);
+        awayRef.current = null;
+        setAway(null);
+        try {
+          localStorage.removeItem(AWAY_KEY);
+        } catch {
+          /* ignore */
+        }
+        setJumpKey((k) => k + 1);
+        say(`Alhamdulillah, udah shalat ${away.name} 🤲 Yuk lanjut lagi!`, 6000, true);
+        later(() => setPeci(false), 90_000); // keeps the peci on for a bit
+      }, ms + 50);
+    }, Math.max(0, away.until - Date.now()));
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [away]);
 
   // ---- drag to move / click to talk -------------------------------------
   const drag = useRef<{ startX: number; origin: number; moved: boolean } | null>(null);
@@ -460,7 +569,7 @@ const Companion: React.FC = () => {
           jumpKey > 0 && !held ? 'clawd-jump' : ''
         } ${held ? '-translate-y-3' : ''}`}
       >
-        <ClawdSprite pose={pose} look={look} size={size} />
+        <ClawdSprite pose={pose} look={look} size={size} peci={peci} />
       </div>
     </div>
   );
