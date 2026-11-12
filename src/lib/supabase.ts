@@ -7,8 +7,16 @@ const withScheme = (v?: string) => (v && !/^https?:\/\//i.test(v) ? `https://${v
 const url = withScheme(clean(import.meta.env.VITE_SUPABASE_URL));
 const anonKey = clean(import.meta.env.VITE_SUPABASE_ANON_KEY);
 
+const validHost = (v?: string) => {
+  try {
+    return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(new URL(v ?? '').hostname);
+  } catch {
+    return false;
+  }
+};
+
 const createSupabase = (): SupabaseClient | null => {
-  if (!url || !anonKey || url.includes('xxxxxxxx')) return null;
+  if (!url || !anonKey || url.includes('xxxxxxxx') || !validHost(url)) return null;
   try {
     return createClient(url, anonKey, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
@@ -47,6 +55,8 @@ export const configProblems = (): ConfigProblem[] => {
   const check = (name: string, valid: (v: string) => boolean, hint: string) => {
     const v = clean(env[name]);
     if (!v) out.push({ name, problem: 'kosong / belum masuk ke build' });
+    else if (/^\.?env(\.|$)/i.test(v))
+      out.push({ name, problem: `berisi teks "${v}" (nama file). Isi dengan nilai setelah tanda = di dalam file .env.local` });
     else if (looksLikePlaceholder(v)) out.push({ name, problem: 'masih berisi nilai contoh (dari .env.example)' });
     else if (!valid(v)) out.push({ name, problem: hint });
   };
