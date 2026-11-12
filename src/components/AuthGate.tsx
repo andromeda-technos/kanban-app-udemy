@@ -1,6 +1,6 @@
 import React from 'react';
 import { useAuth } from '../context/AuthContext';
-import { missingEnvVars } from '../lib/supabase';
+import { configProblems } from '../lib/supabase';
 import { GeometricBackground } from './GeometricBackground';
 import { PixelNightBackground } from './PixelNightBackground';
 import { PREF_KEYS, usePreference } from '../hooks/usePreference';
@@ -54,19 +54,23 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
 
   // Online build without keys: say so instead of silently running in local demo mode
   if (!cloudEnabled && import.meta.env.PROD) {
-    const missing = missingEnvVars();
+    const problems = configProblems();
     return (
       <Screen>
         <ShieldAlert className="w-10 h-10 mx-auto text-amber-500" />
         <h1 className="mt-3 text-lg font-bold">Konfigurasi belum lengkap</h1>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          Website ini di-build tanpa environment variable, jadi belum bisa terhubung ke database tim.
+          Environment variable website ini kosong atau isinya belum benar, jadi belum bisa terhubung ke database tim.
         </p>
-        {missing.length > 0 && (
-          <ul className="mt-4 space-y-1 text-left text-xs font-mono">
-            {missing.map((k) => (
-              <li key={k} className="px-2.5 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300">
-                {k}
+        {problems.length > 0 && (
+          <ul className="mt-4 space-y-1.5 text-left">
+            {problems.map((p) => (
+              <li
+                key={p.name + p.problem}
+                className="px-2.5 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300"
+              >
+                <span className="block text-xs font-mono font-bold">{p.name}</span>
+                <span className="block text-[11px]">{p.problem}</span>
               </li>
             ))}
           </ul>
