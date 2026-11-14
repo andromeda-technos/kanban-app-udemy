@@ -20,8 +20,10 @@ import {
   ImagePlus,
   ImageOff,
   Paperclip,
+  CheckCircle2,
 } from 'lucide-react';
 import { getHostname, getLinkKind } from '../utils/links';
+import { isDoneColumn } from '../utils/deadline';
 
 const MAX_VISIBLE_LINKS = 3;
 
@@ -38,8 +40,16 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   isFirstColumn,
   isLastColumn,
 }) => {
-  const { deleteTask, quickMoveTask, toggleSubtask, reorderSubtasks, updateSubtaskNote, updateTaskMedia } =
-    useKanban();
+  const {
+    deleteTask,
+    quickMoveTask,
+    toggleSubtask,
+    reorderSubtasks,
+    updateSubtaskNote,
+    updateTaskMedia,
+    moveTask,
+    activeColumns,
+  } = useKanban();
   const { enabled: filesEnabled, filesForTask } = useFiles();
   const taskFiles = filesEnabled ? filesForTask(task.id) : [];
   const taskLevelFiles = taskFiles.filter((f) => !f.subtaskId);
@@ -90,6 +100,15 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   };
 
   const dueStatus = getDueStatus();
+
+  const currentColumn = activeColumns.find((c) => c.id === task.columnId);
+  const isDone = !!currentColumn && isDoneColumn(currentColumn);
+  const doneColumn = activeColumns.find(isDoneColumn);
+
+  const handleMarkDone = () => {
+    if (!doneColumn) return;
+    moveTask(task.id, doneColumn.id, Number.MAX_SAFE_INTEGER);
+  };
 
   // Priority badge config
   const priorityConfig = {
@@ -164,7 +183,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             {priorityConfig[task.priority].label}
           </span>
 
-          {dueStatus && (
+          {dueStatus && !isDone && (
             <span
               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${dueStatus.color}`}
             >
@@ -174,6 +193,28 @@ export const TaskCard: React.FC<TaskCardProps> = ({
                 <Clock className="w-3 h-3" />
               )}
               {dueStatus.label}
+            </span>
+          )}
+
+          {task.dueDate && !isDone && doneColumn && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleMarkDone();
+              }}
+              title={`Tandai selesai (pindah ke ${doneColumn.title})`}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors"
+            >
+              <CheckCircle2 className="w-3 h-3" />
+              Tandai Selesai
+            </button>
+          )}
+
+          {isDone && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900">
+              <CheckCircle2 className="w-3 h-3" />
+              Selesai
             </span>
           )}
         </div>
@@ -272,7 +313,11 @@ export const TaskCard: React.FC<TaskCardProps> = ({
       {/* Title */}
       <h4
         onClick={() => onEdit(task)}
-        className="font-semibold text-slate-800 dark:text-slate-100 text-sm leading-snug hover:text-blue-600 dark:hover:text-blue-400 cursor-pointer mb-1.5 transition-colors"
+        className={`font-semibold text-sm leading-snug hover:text-blue-600 dark:hover:text-blue-400 cursor-pointer mb-1.5 transition-colors ${
+          isDone
+            ? 'line-through text-slate-400 dark:text-slate-500'
+            : 'text-slate-800 dark:text-slate-100'
+        }`}
       >
         {task.title}
       </h4>
